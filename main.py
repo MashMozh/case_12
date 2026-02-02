@@ -211,12 +211,18 @@ def main() -> NoReturn:
 
     try:
         # Импортируем Windows-специфичные модули только после проверки
-        import navigation  # Модуль инженера навигации
-        import analysis  # Модуль аналитика
-        import search  # Модуль эксперта поиска
+        import navigation
+        import analysis
+        import search
+
     except ImportError as e:
         print(f"ОШИБКА: Не удалось импортировать модуль: {e}")
-        print("Убедитесь, что все модули (utils.py, navigation.py, analysis.py, search.py) находятся в той же папке.")
+        print("Убедитесь, что все модули находятся в той же папке.")
+        sys.exit(1)
+    except OSError as e:
+        # Windows-специфичные ошибки импорта
+        print(f"ОШИБКА Windows: {e}")
+        print("Возможно, не хватает системных библиотек.")
         sys.exit(1)
 
     # 2. Показать баннер
@@ -227,25 +233,49 @@ def main() -> NoReturn:
 
     while True:
         try:
-            # Отображаем главное меню
             display_main_menu(current_path)
-
-            # Получаем команду от пользователя
             command = input("\nВведите команду: ").strip()
-
-            # Обрабатываем команду
             current_path = run_windows_command(command, current_path)
 
         except KeyboardInterrupt:
             print("\n\nПрограмма прервана пользователем.")
             break
+
+        except PermissionError:
+            print("\nОШИБКА: Отказано в доступе!")
+            print("Запустите программу от имени администратора или выберите другой путь.")
+
+        except OSError as e:
+            # Обработка Windows-specific OSError
+            if hasattr(e, 'winerror'):  # Windows error code
+                winerror = e.winerror
+
+                ERROR_ACCESS_DENIED = 5
+                ERROR_PATH_NOT_FOUND = 3
+                ERROR_INVALID_NAME = 123
+
+                if winerror == ERROR_ACCESS_DENIED:
+                    print("\nОШИБКА: Отказано в доступе (код 5)")
+                    print("Возможно, у вас нет прав на доступ к этому файлу/папке.")
+                elif winerror == ERROR_PATH_NOT_FOUND:
+                    print("\nОШИБКА: Путь не найден (код 3)")
+                    print("Убедитесь, что путь указан правильно.")
+                elif winerror == ERROR_INVALID_NAME:
+                    print("\nОШИБКА: Неверное имя файла (код 123)")
+                    print("Имя содержит недопустимые символы.")
+                else:
+                    print(f"\nОШИБКА Windows (код {winerror}): {e}")
+            else:
+                print(f"\nОШИБКА ОС: {e}")
+
         except SystemExit:
             raise
+
         except Exception as e:
-            print(f"\nПроизошла ошибка: {e}")
+            print(f"\nНеожиданная ошибка: {e}")
+            print("Тип ошибки:", type(e).__name__)
             print("Продолжаем работу...")
 
-    # 4. Завершение работы
     print("\nСпасибо за использование Windows файлового менеджера!")
     sys.exit(0)
 
