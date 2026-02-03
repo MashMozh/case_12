@@ -17,6 +17,10 @@ def validate_windows_path(path: PathString) -> Tuple[bool, str]:
     p_str = str(path)
     p_obj = Path(p_str)
 
+    # 0. Пустая строка недопустима
+    if not p_str.strip():
+        return False, "Путь не может быть пустым"
+
     # 1. Проверка формата диска (если есть)
     disk_match = re.match(r'^([A-Za-z]):', p_str)
     disk_prefix = ''
@@ -30,12 +34,29 @@ def validate_windows_path(path: PathString) -> Tuple[bool, str]:
         if not re.match(r'^[A-Za-z]:$', disk_prefix):
             return False, f"Некорректный формат диска: {disk_prefix}"
 
-    # 2. Проверка запрещенных символов (полный список)
-    # В Windows запрещены: < > : " | ? * и / (кроме как разделителя)
+    # 2. Проверка на абсолютные пути без диска (может быть UNC или относительный)
+    elif p_str.startswith('\\'):
+        # UNC путь или относительный путь от корня диска
+        if p_str.startswith('\\\\'):
+            # UNC путь: \\server\share
+            if len(p_str) < 4 or '\\' not in p_str[2:]:
+                return False, "Некорректный UNC путь"
+        # Относительный путь от корня: \Windows\System32
+        # Это допустимо
+
+    # 3. Проверка запрещенных символов (полный список для Windows)
+    # В Windows запрещены: < > : " | ? *
+    # / запрещен, но иногда работает (автоматически заменяется)
     forbidden_chars = ['<', '>', ':', '"', '|', '?', '*']
 
     # Проверяем двоеточия вне формата диска
-    if ':' in remaining_path:
+    # Разрешаем только одно двоеточие и только сразу после буквы диска
+    colon_count = p_str.count(':')
+    if colon_count > 1:
+        return False, "В пути может быть только одно двоеточие (для обозначения диска)"
+
+    if colon_count == 1 and not disk_match:
+        # Есть двоеточие, но не в формате диска
         return False, "Двоеточие разрешено только в формате диска (C:)"
 
     # Проверяем другие запрещенные символы
@@ -43,15 +64,15 @@ def validate_windows_path(path: PathString) -> Tuple[bool, str]:
         if char in remaining_path:
             return False, f"Путь содержит запрещенный символ: '{char}'"
 
-    # 3. Проверка зарезервированных имен Windows
+    # 4. Проверка зарезервированных имен Windows
     reserved_names = [
         'CON', 'PRN', 'AUX', 'NUL',
         'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
         'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
     ]
 
-    # Разбиваем путь на компоненты
-    path_parts = [part for part in remaining_path.split('\\') if part]
+    # Разбиваем путь на компоненты (игнорируем пустые части)
+    path_parts = [part for part in re.split(r'[\\/]+', remaining_path) if part]
 
     for part in path_parts:
         # Проверяем без учета расширения
@@ -59,32 +80,68 @@ def validate_windows_path(path: PathString) -> Tuple[bool, str]:
         if name_without_ext in reserved_names:
             return False, f"Использовано зарезервированное имя: {part}"
 
-        # Проверка точек в конце
-        if part.endswith('.') or part.endswith(' '):
-            return False, "Имя файла не может заканчиваться точкой или пробелом"
+        # Проверка точек и пробелов в конце имени файла
+        if part.endswith('.'):
+            return False, "Имя файла не может заканчиваться точкой"
+        if part.endswith(' '):
+            return False, "Имя файла не может заканчиваться пробелом"
+        if part.startswith(' '):
+            return False, "Имя файла не может начинаться с пробела"
 
-    # 4. Проверка максимальной длины пути
+    # 5. Проверка максимальной длины пути
     # Обычные пути: 260 символов, длинные пути с \\?\: 32767 символов
     if p_str.startswith('\\\\?\\'):
         # Длинный путь Windows
         if len(p_str) > 32767:
-            return False, "Путь содержит более 32767 символов"
+            return False, f"Длинный путь содержит {len(p_str)} символов (максимум 32767)"
+    else:
+        # Обычный путь (без префикса \\?\)
+        if len(p_str) > 260:
+            return False, f"Путь содержит {len(p_str)} символов (максимум 260)"
+
+    # 6. Проверка корректности разделителей пути
+    # Не должно быть смешанных разделителей
+    if '\\' in p_str and '/' in p_str:
+        return False, "Нельзя смешивать разделители \\ и / в одном пути"
+
+    # Проверяем двойные разделители (кроме специальных случаев)
+    if p_str.startswith('\\\\?\\'):
+        # Для длинных путей проверяем после префикса
+        path_after_prefix = p_str[4:]
+        if re.search(r'[\\/]{2,}', path_after_prefix):
+            return False, "Некорректное использование разделителей пути (двойные разделители)"
+    elif p_str.startswith('\\\\'):
+        # UNC путь: \\server\share\...
+        # Проверяем после \\server\
+        match = re.match(r'^(\\\\[^\\/]+[\\/])(.*)', p_str)
+        if match:
+            prefix, rest = match.groups()
+            if re.search(r'[\\/]{2,}', rest):
+                return False, "Некорректное использование разделителей пути (двойные разделители в UNC)"
     else:
         # Обычный путь
-        if len(p_str) > 260:
-            return False, "Путь содержит более 260 символов"
+        if re.search(r'[\\/]{2,}', p_str):
+            return False, "Некорректное использование разделителей пути (двойные разделители)"
 
-    # 5. Проверка существования пути (опционально)
+    # 7. Проверка существования пути (опционально, но полезно)
+    # Можно раскомментировать если нужна строгая проверка
+    """
     if not p_obj.exists():
-        # Не возвращаем ошибку, так как путь может быть создан позже
-        # return False, "Путь не существует"
-        pass
+        return False, "Путь не существует"
+    """
 
-    # 6. Проверка корректности обратных слешей
-    # Не должно быть двойных слешей, кроме как после диска
-    normalized_path = re.sub(r'\\\\+', '\\\\', p_str)
-    if '\\\\' in normalized_path.replace(disk_prefix + '\\\\', ''):
-        return False, "Некорректное использование обратных слешей"
+    # 8. Проверка на валидность для файловой системы NTFS
+    # Некоторые символы технически разрешены, но не рекомендуются
+    not_recommended_chars = ['$', '%', '&', "'", '+', ',', ';', '=', '@', '[', ']', '^', '`', '{', '}', '~']
+    found_not_recommended = []
+    for char in not_recommended_chars:
+        if char in remaining_path:
+            found_not_recommended.append(char)
+
+    if found_not_recommended:
+        # Не возвращаем ошибку, только предупреждение в сообщении
+        warning = f" (не рекомендуется использовать символы: {', '.join(found_not_recommended)})"
+        return True, f"Путь валиден{warning}"
 
     return True, "Путь валиден"
 
