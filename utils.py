@@ -3,180 +3,183 @@ import platform
 from pathlib import Path
 from typing import Union, List, Tuple
 import re
+import local as lcl
 
 PathString = Union[str, Path]
 
 
 def is_windows_os() -> bool:
-    """Проверка что программа запущена на Windows"""
+    """Checks whether current OS is Windows.
+
+    Args:
+        None
+
+    Returns:
+        bool: True if the OS is Windows, False otherwise
+    """
+
     return platform.system() == "Windows"
 
 
 def validate_windows_path(path: PathString) -> Tuple[bool, str]:
-    """Проверка корректности Windows пути с учетом всех особенностей"""
-    p_str = str(path)
-    p_obj = Path(p_str)
+    """Validates a Windows file system path according to Windows rules.
+    Performs checks for:
+    - Empty paths
+    - Drive format
+    - UNC paths
+    - Forbidden characters
+    - Reserved device names
+    - Trailing spaces or dots
+    - Path length limits
+    - Mixed or duplicate separators
+    - NTFS discouraged characters
 
-    # 0. Пустая строка недопустима
+    Args:
+        path (str | Path): Path to validate.
+
+    Returns:
+        tuple:
+            bool: True if path is valid.
+            str: Validation result message.
+    """
+
+    p_str = str(path)
+
     if not p_str.strip():
         return False, "Путь не может быть пустым"
 
-    # 1. Проверка формата диска (если есть)
     disk_match = re.match(r'^([A-Za-z]):', p_str)
-    disk_prefix = ''
     remaining_path = p_str
 
     if disk_match:
-        disk_prefix = disk_match.group(0)  # "C:"
-        remaining_path = p_str[len(disk_prefix):]  # Остаток пути
+        disk_prefix = disk_match.group(0)
+        remaining_path = p_str[len(disk_prefix):]
 
-        # Проверка что буква диска корректная
         if not re.match(r'^[A-Za-z]:$', disk_prefix):
-            return False, f"Некорректный формат диска: {disk_prefix}"
+            return False, f"{lcl.INCORRECT1}: {disk_prefix}"
 
-    # 2. Проверка на абсолютные пути без диска (может быть UNC или относительный)
     elif p_str.startswith('\\'):
-        # UNC путь или относительный путь от корня диска
         if p_str.startswith('\\\\'):
-            # UNC путь: \\server\share
             if len(p_str) < 4 or '\\' not in p_str[2:]:
-                return False, "Некорректный UNC путь"
-        # Относительный путь от корня: \Windows\System32
-        # Это допустимо
+                return False, f'{lcl.INCORRECT2}'
 
-    # 3. Проверка запрещенных символов (полный список для Windows)
-    # В Windows запрещены: < > : " | ? *
-    # / запрещен, но иногда работает (автоматически заменяется)
+
     forbidden_chars = ['<', '>', ':', '"', '|', '?', '*']
 
-    # Проверяем двоеточия вне формата диска
-    # Разрешаем только одно двоеточие и только сразу после буквы диска
     colon_count = p_str.count(':')
     if colon_count > 1:
-        return False, "В пути может быть только одно двоеточие (для обозначения диска)"
+        return False, f'{lcl.COLON1}'
 
     if colon_count == 1 and not disk_match:
-        # Есть двоеточие, но не в формате диска
-        return False, "Двоеточие разрешено только в формате диска (C:)"
-
-    # Проверяем другие запрещенные символы
+        return False, f'{lcl.COLON2}'
     for char in forbidden_chars:
         if char in remaining_path:
-            return False, f"Путь содержит запрещенный символ: '{char}'"
+            return False, f" f'{lcl.SYMBOL}' : '{char}'"
 
-    # 4. Проверка зарезервированных имен Windows
     reserved_names = [
         'CON', 'PRN', 'AUX', 'NUL',
         'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
         'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
     ]
 
-    # Разбиваем путь на компоненты (игнорируем пустые части)
     path_parts = [part for part in re.split(r'[\\/]+', remaining_path) if part]
 
     for part in path_parts:
-        # Проверяем без учета расширения
         name_without_ext = os.path.splitext(part)[0].upper()
         if name_without_ext in reserved_names:
-            return False, f"Использовано зарезервированное имя: {part}"
+            return False, f"f'{lcl.NAME1}' : {part}"
 
-        # Проверка точек и пробелов в конце имени файла
         if part.endswith('.'):
-            return False, "Имя файла не может заканчиваться точкой"
+            return False, f'{lcl.NAME2}'
         if part.endswith(' '):
-            return False, "Имя файла не может заканчиваться пробелом"
+            return False, f'{lcl.NAME3}'
         if part.startswith(' '):
-            return False, "Имя файла не может начинаться с пробела"
+            return False, f'{lcl.NAME4}'
 
-    # 5. Проверка максимальной длины пути
-    # Обычные пути: 260 символов, длинные пути с \\?\: 32767 символов
     if p_str.startswith('\\\\?\\'):
-        # Длинный путь Windows
         if len(p_str) > 32767:
-            return False, f"Длинный путь содержит {len(p_str)} символов (максимум 32767)"
+            return False, (f'{lcl.PATH1}' + f"{len(p_str)}" + f'{lcl.PATH2}')
     else:
-        # Обычный путь (без префикса \\?\)
         if len(p_str) > 260:
-            return False, f"Путь содержит {len(p_str)} символов (максимум 260)"
+            return False, f'{lcl.PATH3}' + f"{len(p_str)}" + f'{lcl.PATH4}'
 
-    # 6. Проверка корректности разделителей пути
-    # Не должно быть смешанных разделителей
     if '\\' in p_str and '/' in p_str:
-        return False, "Нельзя смешивать разделители \\ и / в одном пути"
+        return False, f'{lcl.SEPARATOR1}'
 
-    # Проверяем двойные разделители (кроме специальных случаев)
     if p_str.startswith('\\\\?\\'):
-        # Для длинных путей проверяем после префикса
         path_after_prefix = p_str[4:]
         if re.search(r'[\\/]{2,}', path_after_prefix):
-            return False, "Некорректное использование разделителей пути (двойные разделители)"
+            return False, f'{lcl.SEPARATOR2}'
     elif p_str.startswith('\\\\'):
-        # UNC путь: \\server\share\...
-        # Проверяем после \\server\
         match = re.match(r'^(\\\\[^\\/]+[\\/])(.*)', p_str)
         if match:
             prefix, rest = match.groups()
             if re.search(r'[\\/]{2,}', rest):
-                return False, "Некорректное использование разделителей пути (двойные разделители в UNC)"
+                return False, f'{lcl.SEPARATOR3}'
     else:
-        # Обычный путь
         if re.search(r'[\\/]{2,}', p_str):
-            return False, "Некорректное использование разделителей пути (двойные разделители)"
+            return False, f'{lcl.SEPARATOR2}'
 
-    # 7. Проверка существования пути (опционально, но полезно)
-    # Можно раскомментировать если нужна строгая проверка
-    """
-    if not p_obj.exists():
-        return False, "Путь не существует"
-    """
-
-    # 8. Проверка на валидность для файловой системы NTFS
-    # Некоторые символы технически разрешены, но не рекомендуются
-    not_recommended_chars = ['$', '%', '&', "'", '+', ',', ';', '=', '@', '[', ']', '^', '`', '{', '}', '~']
+    not_recommended_chars = ['$', '%', '&', "'", '+', ',', ';', '=',
+                             '@','[', ']', '^', '`', '{', '}', '~']
     found_not_recommended = []
     for char in not_recommended_chars:
         if char in remaining_path:
             found_not_recommended.append(char)
 
     if found_not_recommended:
-        # Не возвращаем ошибку, только предупреждение в сообщении
-        warning = f" (не рекомендуется использовать символы: {', '.join(found_not_recommended)})"
-        return True, f"Путь валиден{warning}"
+        warning = (f'{lcl.SYMBOLS}', f"{', '.join(found_not_recommended)})")
+        return True, f'{lcl.VALID}' + f"{warning}"
 
-    return True, "Путь валиден"
+    return True, f'{lcl.VALID}'
 
 
 def format_size(size_bytes: int) -> str:
-    """Форматирование размера файла в читаемом виде для Windows"""
+    """Converts a file size in bytes to a human-readable Windows-style format.
+
+    Args:
+        size_bytes (int): File size in bytes.
+
+    Returns:
+        str: Formatted size string (b, kb, mb, gb, tb)
+    """
+
     if size_bytes < 1024:
         return f"{size_bytes} B"
 
-    KB = 1024
-    MB = KB * 1024
-    GB = MB * 1024
-    TB = GB * 1024
+    kb = 1024
+    mb = kb * 1024
+    gb = mb * 1024
+    tb = gb * 1024
 
-    if size_bytes < MB:
-        return f"{size_bytes / KB:.1f} KB"
-    elif size_bytes < GB:
-        return f"{size_bytes / MB:.1f} MB"
-    elif size_bytes < TB:
-        return f"{size_bytes / GB:.1f} GB"
+    if size_bytes < mb:
+        return f"{size_bytes / kb:.1f} KB"
+    elif size_bytes < gb:
+        return f"{size_bytes / mb:.1f} MB"
+    elif size_bytes < tb:
+        return f"{size_bytes / gb:.1f} GB"
     else:
-        return f"{size_bytes / TB:.1f} TB"
+        return f"{size_bytes / tb:.1f} TB"
 
 
 def get_parent_path(path: PathString) -> str:
-    """Получение родительского каталога с учетом Windows путей"""
+    """Returns the parent directory of a path with Windows root handling.
+    Ensures drive roots end with backslash (C:\\).
+
+    Args:
+        path (str | Path): Input path.
+
+    Returns:
+        str: Parent directory path.
+    """
+
     p_str = str(path)
     parent = os.path.dirname(p_str)
 
-    # Для Windows: если родительский каталог - это только диск, добавляем \
     if platform.system() == "Windows":
         if re.match(r'^[A-Za-z]:$', parent):
             parent = parent + '\\'
         elif re.match(r'^[A-Za-z]:\\$', parent):
-            # Уже корректный формат
             pass
     elif os.path.splitdrive(parent)[1] == "":
         parent = os.path.join(parent, "")
@@ -185,7 +188,17 @@ def get_parent_path(path: PathString) -> str:
 
 
 def safe_windows_listdir(path: PathString) -> List[str]:
-    """Безопасное получение содержимого каталога в Windows"""
+    """Safely lists directory contents on Windows.
+
+    Handles PermissionError, FileNotFoundError and OS errors silently.
+
+    Args:
+        path (str | Path): Directory path.
+
+    Returns:
+        list: List of file and folder names, or empty list on failure.
+    """
+
     try:
         p_str = str(path)
         return os.listdir(p_str)
@@ -194,13 +207,23 @@ def safe_windows_listdir(path: PathString) -> List[str]:
 
 
 def is_hidden_windows_file(path: PathString) -> bool:
-    """Проверка является ли файл скрытым в Windows с обработкой ошибок"""
+    """Determines whether a file is hidden.
+
+    On Windows uses WinAPI FILE_ATTRIBUTE_HIDDEN.
+    On Unix-like systems checks for leading dot.
+
+    Args:
+        path (str | Path): File path.
+
+    Returns:
+        bool: True if file is hidden, otherwise False.
+    """
+
     p_str = str(path)
 
     if not Path(p_str).exists():
         return False
 
-    # Для Windows используем WinAPI
     if platform.system() == "Windows":
         try:
             import ctypes
@@ -214,28 +237,34 @@ def is_hidden_windows_file(path: PathString) -> bool:
 
             attrs = GetFileAttributesW(p_str)
 
-            if attrs == 0xFFFFFFFF:  # INVALID_FILE_ATTRIBUTES
+            if attrs == 0xFFFFFFFF:
                 last_error = ctypes.windll.kernel32.GetLastError()
-                ERROR_ACCESS_DENIED = 5
+                error_access_denied = 5
 
-                if last_error == ERROR_ACCESS_DENIED:
-                    return True  # Если доступ запрещен - считаем скрытым
+                if last_error == error_access_denied:
+                    return True
                 return False
 
             return bool(attrs & file_attribute_hidden)
 
         except Exception:
-            # Если WinAPI недоступен, пробуем другие методы
             pass
 
-    # Для Unix/Linux/Mac или при ошибке WinAPI
-    # В Unix скрытые файлы начинаются с точки
     return os.path.basename(p_str).startswith('.')
 
 
-# Дополнительные полезные функции для Windows
 def get_windows_reserved_names() -> List[str]:
-    """Получение списка зарезервированных имен в Windows"""
+    """Returns the list of Windows reserved device names.
+
+    Includes CON, PRN, AUX, NUL, COM1–COM9, LPT1–LPT9.
+
+    Args:
+        None
+
+    Returns:
+        list: Reserved Windows filenames.
+    """
+
     return [
         'CON', 'PRN', 'AUX', 'NUL',
         'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
@@ -244,14 +273,23 @@ def get_windows_reserved_names() -> List[str]:
 
 
 def normalize_windows_path(path: str) -> str:
-    """Нормализация Windows пути"""
-    # Заменяем прямые слеши на обратные
+    """Normalizes a Windows path.
+
+    - Converts forward slashes to backslashes
+    - Removes duplicate separators
+    - Removes trailing backslash unless path is drive root
+
+    Args:
+        path (str): Input path.
+
+    Returns:
+        str: Normalized Windows path.
+    """
+
     path = path.replace('/', '\\')
 
-    # Убираем двойные слеши
     path = re.sub(r'\\\\+', '\\', path)
 
-    # Убираем слеш в конце, если это не корень диска
     if path.endswith('\\') and not re.match(r'^[A-Za-z]:\\$', path):
         path = path.rstrip('\\')
 
